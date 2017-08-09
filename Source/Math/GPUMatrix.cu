@@ -458,6 +458,14 @@ void GPUMatrix<ElemType>::performElementWiseFunction(ElementWiseOperator kind, c
         return _elementWiseCosineOnCuda<ElemType><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, t_stream>>>(src, Data(), N);
     case ElementWiseOperator::opNegativeSine:
         return _elementWiseNegativeSineOnCuda<ElemType><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, t_stream>>>(src, Data(), N);
+    case ElementWiseOperator::opAcos:
+        return _elementWiseAcosOnCuda<ElemType><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, t_stream>>>(src, Data(), N);
+    case ElementWiseOperator::opAsin:
+        return _elementWiseAsinOnCuda<ElemType><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, t_stream>>>(src, Data(), N);
+    case ElementWiseOperator::opCosh:
+        return _elementWiseCoshOnCuda<ElemType><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, t_stream>>>(src, Data(), N);
+    case ElementWiseOperator::opSinh:
+        return _elementWiseSinhOnCuda<ElemType><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, t_stream>>>(src, Data(), N);
     case ElementWiseOperator::opSigmoidDerivative:
         return _elementWiseSigmoidDerivativeOnCuda<ElemType><<<blocksPerGrid, GridDim::maxThreadsPerBlock, 0, t_stream>>>(src, Data(), N);
     default: LogicError("performElementWiseFunction: unexpected op code %d", (int)kind);
@@ -1124,7 +1132,7 @@ void GPUMatrix<ElemType>::SetValue(const ElemType v)
 }
 
 template <class ElemType>
-void GPUMatrix<ElemType>::SetValue(const ElemType* d_v) // d_v is pointer to the the value in GPU memory
+void GPUMatrix<ElemType>::SetValue(const ElemType* d_v) // d_v is pointer to the value in GPU memory
 {
     if (IsEmpty())
         LogicError("SetValue: Matrix is empty.");
@@ -2333,6 +2341,18 @@ DEF_ELEMWISE_ASSIGN_FUNC(Cosine)
 DEF_ELEMWISE_INPLACE_FUNC(NegativeSine)
 DEF_ELEMWISE_ASSIGN_FUNC(NegativeSine)
 
+DEF_ELEMWISE_INPLACE_FUNC(Acos)
+DEF_ELEMWISE_ASSIGN_FUNC(Acos)
+
+DEF_ELEMWISE_INPLACE_FUNC(Asin)
+DEF_ELEMWISE_ASSIGN_FUNC(Asin)
+
+DEF_ELEMWISE_INPLACE_FUNC(Cosh)
+DEF_ELEMWISE_ASSIGN_FUNC(Cosh)
+
+DEF_ELEMWISE_INPLACE_FUNC(Sinh)
+DEF_ELEMWISE_ASSIGN_FUNC(Sinh)
+
 template <class ElemType>
 GPUMatrix<ElemType>& GPUMatrix<ElemType>::InplaceTruncateBottom(const ElemType threshold)
 {
@@ -3328,11 +3348,15 @@ void GPUMatrix<ElemType>::MaxPoolingForward(const GPUMatrix<int>& mpRowCol, cons
 template <class ElemType>
 void GPUMatrix<ElemType>::MaxPoolingBackward(const GPUMatrix<ElemType>& out, const GPUMatrix<ElemType>& in,
                                              const GPUMatrix<int>& mpRowCol, const GPUMatrix<int>& mpRowIndices, const GPUMatrix<int>& indices,
-                                             GPUMatrix<ElemType>& grad) const
+                                             GPUMatrix<ElemType>& grad, bool accumulateGradient) const
 {
     const int BlockSize = 128;
     auto gdim = dim3((GetNumRows() + BlockSize - 1)/ BlockSize, std::min((int)GetNumCols(), 65535));
     PrepareDevice();
+
+    if (!accumulateGradient)
+        grad.SetValue((ElemType)0);
+
     SyncGuard syncGuard;
     kMaxPoolingBackward<<<gdim, BlockSize, 0, t_stream>>>((int)GetNumCols(), out.Data(), in.Data(),
                                                             mpRowCol.Data(), mpRowIndices.Data(), indices.Data(),
@@ -3392,11 +3416,15 @@ void GPUMatrix<ElemType>::AveragePoolingForward(const GPUMatrix<int>& mpRowCol, 
 }
 
 template <class ElemType>
-void GPUMatrix<ElemType>::AveragePoolingBackward(const GPUMatrix<int>& mpRowCol, const GPUMatrix<int>& mpRowIndices, const GPUMatrix<int>& indices, GPUMatrix<ElemType>& grad) const
+void GPUMatrix<ElemType>::AveragePoolingBackward(const GPUMatrix<int>& mpRowCol, const GPUMatrix<int>& mpRowIndices, const GPUMatrix<int>& indices, GPUMatrix<ElemType>& grad, bool accumulateGradient) const
 {
     const int BlockSize = 128;
     auto gdim = dim3((GetNumRows() + BlockSize - 1)/ BlockSize, std::min((int)GetNumCols(), 65535));
     PrepareDevice();
+
+    if (!accumulateGradient)
+        grad.SetValue((ElemType)0);
+
     SyncGuard syncGuard;
     kAveragePoolingBackward<<<gdim, BlockSize, 0, t_stream>>>((int)GetNumCols(), mpRowCol.Data(), mpRowIndices.Data(), indices.Data(),
                                                                 Data(), (int)GetNumRows(), grad.Data(), (int)grad.GetNumRows());
@@ -4511,7 +4539,7 @@ GPUMatrix<ElemType>& GPUMatrix<ElemType>::GetARowByIndex(const GPUMatrix<ElemTyp
 // phoneBoundary (input): phone boundary (frame index) of each phone for each utterance in this minibatch, each col is one utterance 
 // totalScore (output): total CTC score
 // uttToChanInd (input):  map from utterance ID to minibatch channel ID. We need this because each channel may contain more than one utterance.
-// uttBeginFrame(input): the positon of the first frame of each utterance in the minibatch channel. We need this because each channel may contain more than one utterance.
+// uttBeginFrame(input): the position of the first frame of each utterance in the minibatch channel. We need this because each channel may contain more than one utterance.
 // uttFrameNum (input): the frame number of each utterance. The size of this vector =  the number of all utterances in this minibatch
 // uttPhoneNum (input): the phone number of each utterance. The size of this vector =  the number of all utterances in this minibatch
 // numParallelSequences (input): channel number in this minibatch
