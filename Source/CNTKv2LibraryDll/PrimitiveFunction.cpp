@@ -22,103 +22,12 @@
 #include "ConvolutionalNodes.h"
 #include "Variable.h"
 #include "UserFunctionFactory.h"
+#include "PrimitiveFunctionAttributes.h"
 
 using namespace Microsoft::MSR::CNTK;
 
 namespace CNTK
 {
-    // Names for the reduction operations as used by the CNTK ReduceElementsNode
-    /*static*/ const std::wstring PrimitiveFunction::InternalSumReductionOpName = L"Sum";
-    /*static*/ const std::wstring PrimitiveFunction::InternalLogSumReductionOpName = L"LogSum";
-    /*static*/ const std::wstring PrimitiveFunction::InternalMeanReductionOpName = L"Mean";
-    /*static*/ const std::wstring PrimitiveFunction::InternalMaxReductionOpName = L"Max";
-    /*static*/ const std::wstring PrimitiveFunction::InternalMinReductionOpName = L"Min";
-    /*static*/ const std::wstring PrimitiveFunction::InternalProdReductionOpName = L"Prod";
-    /*static*/ const std::wstring PrimitiveFunction::InternalAllReductionOpName = L"All";
-    /*static*/ const std::wstring PrimitiveFunction::InternalAnyReductionOpName = L"Any";
-    /*static*/ const std::wstring PrimitiveFunction::InternalArgmaxReductionOpName = L"Argmax";
-    /*static*/ const std::wstring PrimitiveFunction::InternalArgminReductionOpName = L"Argmin";
-
-    // Names of the various attributes of CNTK primitive Functions
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameAxis = L"axis";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameAxisVec = L"axisVec";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameAxis1 = L"axis1";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameAxis2 = L"axis2";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameAllowDuplicates = L"allowDuplicates";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNumSamples = L"numSamples";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameDropoutRate = L"dropoutRate";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNewShape = L"newShape";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBeginAxis = L"beginAxis";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameEndAxis = L"endAxis";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameOutputRank = L"outputRank";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameInferInputRankToMap = L"inferInputRankToMap";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameOffset = L"offset";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameStrides = L"strides";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameDilation = L"dilation";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSharing = L"sharing";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameAutoPadding = L"autoPadding";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameLowerPad = L"lowerPad";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameUpperPad = L"upperPad";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameCeilOutDim = L"ceilOutDim";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameIncludePad = L"includePad";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameTranspose = L"transpose";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameOutputShape = L"outputShape";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameMaxTempMemSizeInSamples = L"maxTempMemSizeInSamples";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameROIOutputShape = L"roiOutputShape";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNamePoolingType = L"poolingType";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNamePoolingWindowShape = L"poolingWindowShape";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSpatial = L"spatial";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNormalizationTimeConstant = L"normalizationTimeConstant";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBlendTimeConstant = L"blendTimeConstant";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameEpsilon = L"epsilon";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameUseCuDNNEngine = L"useCuDNNEngine";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNewDataType = L"newDataType";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNewDynamicAxes = L"newDynamicAxes";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNewSequenceAxisLengthScalingFactor = L"newSequenceAxisLengthScalingFactor";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNewSequenceAxisLengthAdditiveFactor = L"newSequenceAxisLengthAdditiveFactor";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBeginIndex = L"beginIndex";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBeginIndexVec = L"beginIndexVec";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameEndIndex = L"endIndex";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameEndIndexVec = L"endIndexVec";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameReductionOpName = L"reductionOpName";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameReductionKeepDimensions = L"reductionKeepDimensions";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBidirectional = L"bidirectional";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNumLayers = L"numLayers";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameHiddenSize = L"hiddenSize";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameRecurrentOp = L"recurrentOp";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameRngSeed = L"rngSeed";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameRngOffset = L"rngOffset";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameUnpoolingWindowShape = L"unpoolingWindowShape";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSubstitutionPenalty = L"SubstitutionPenalty";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameDeletionPenalty = L"DeletionPenalty";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameInsertionPenalty = L"InsertionPenalty";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSquashInputs = L"SquashInputs";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameTokensToIgnore = L"TokensToIgnore";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameDelayConstraint = L"DelayConstraint";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBlankTokenId = L"BlankTokenId";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameNumClass = L"numClass";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameOneHotOutputSparse = L"oneHotOutputSparse";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameOneHotAxis = L"onehotAxis";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSequenceAxisNamePrefix = L"sequenceAxis";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSequenceUnpackPaddingValue = L"sequenceUnpackPaddingValue";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSequenceUnpackSuppressMaskOutput = L"sequenceUnpackSuppressMaskOutput";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameRandomDistributionType = L"randomDistributionType";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameRandomDistributionArgs = L"randomDistributionArgs";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSpatialScale = L"spatialScale";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSliceStrides = L"sliceStrides";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameSliceStridesVec = L"sliceStridesVec";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNamePaddingHead = L"paddingHead";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNamePaddingFoot = L"paddingFoot";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNamePaddingMode = L"paddingMode";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNamePaddingConstantValue = L"paddingConstantValue";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameAlpha = L"alpha";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBeta = L"beta";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameGamma = L"gamma";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameKernelShape = L"kernelShape";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameBias = L"bias";
-    /*static*/ const std::wstring PrimitiveFunction::AttributeNameDepthRadius = L"depthRadius";
-
-
     /*static*/ DataType PrimitiveFunction::GetOutputDataType(PrimitiveOpType op, std::vector<Variable>& inputs, bool inferDimensions)
     {
 
@@ -144,8 +53,14 @@ namespace CNTK
                 }
                 else
                 {
+                    // batch normalization on FP16 requires 32-bit scale/bias/mean/variance, so specialize that case
+                    bool batchNormSpecialCase =
+                        (op == PrimitiveOpType::BatchNormalization) &&
+                        (outputDataType == DataType::Float16) &&
+                        (inputDataType == DataType::Float);
+
                     // The DataType of all operands should match except for Constants where we allow coercion
-                    if ((inputDataType != DataType::Unknown) && (inputDataType != outputDataType) && !input.IsConstant())
+                    if ((inputDataType != DataType::Unknown) && (inputDataType != outputDataType) && !input.IsConstant() && !batchNormSpecialCase)
                         InvalidArgument("Primitive op '%S' passed operands '%S' with different DataTypes '%s' and '%s'.",
                                         PrimitiveOpTypeName(op).c_str(), NamedListString(inputs).c_str(), DataTypeName(outputDataType), DataTypeName(inputDataType));
                 }
@@ -161,7 +76,18 @@ namespace CNTK
             for (auto& input : inputs)
             {
                 if ((input.GetDataType() == DataType::Unknown) && (input.IsConstant() || input.IsParameter()))
-                    input.m_dataFields->m_dataType = outputDataType;
+                {
+                    // batch normalization on FP16 requires 32-bit scale/bias/mean/variance, so specialize that case
+                    if ((op == PrimitiveOpType::BatchNormalization) &&
+                        (outputDataType == DataType::Float16))
+                    {
+                        input.m_dataFields->m_dataType = DataType::Float;
+                    }
+                    else
+                    {
+                        input.m_dataFields->m_dataType = outputDataType;
+                    }
+                }
             }
         }
 
@@ -201,6 +127,7 @@ namespace CNTK
             (op == PrimitiveOpType::ReduceElements &&  anyOfAxesInReduction([](const Axis& axis) { return axis == Axis::AllAxes(); })) ||
             (op == PrimitiveOpType::SquaredError) ||
             (op == PrimitiveOpType::CrossEntropyWithSoftmax) ||
+            (op == PrimitiveOpType::LatticeSequenceWithSoftmax) ||
             (op == PrimitiveOpType::EditDistanceError) ||
             (op == PrimitiveOpType::ClassificationError) ||
             (op == PrimitiveOpType::ForwardBackward) ||
@@ -322,9 +249,38 @@ namespace CNTK
             outputs.assign(m_inputs.begin(), m_inputs.end());
         else if (m_op == PrimitiveOpType::NoOp)
             outputs.push_back(OutputVariable(m_inputs[0].Shape(), m_inputs[0].GetDataType(), m_inputs[0].DynamicAxes(), m_inputs[0].NeedsGradient(), Name()));
+        else if (m_op == PrimitiveOpType::CustomProxyOp)
+        {
+            // Set the output data type and shape using attributes.
+            DataType outputDataType = DataType::Unknown;
+            if (m_attributes.Contains(PrimitiveFunction::AttributeNameNewDataType))
+            {
+                outputDataType = static_cast<DataType>(m_attributes[PrimitiveFunction::AttributeNameNewDataType].Value<int>());
+            }
+            else
+            {
+                InvalidArgument("Output type must be specified for CustomProxyOp.");
+            }
+            NDShape outputShape = NDShape::Unknown();
+            if (m_attributes.Contains(PrimitiveFunction::AttributeNameOutputShape))
+            {
+                outputShape = m_attributes[PrimitiveFunction::AttributeNameOutputShape].Value<NDShape>();
+            }
+            else
+            {
+                InvalidArgument("Output shape must be specified for CustomProxyOp.");
+            }
+
+            std::vector<Axis> outputDynamicAxes = GetOutputDynamicAxes(m_op, m_inputs, this, m_attributes);
+            outputs.push_back(OutputVariable(outputShape, outputDataType, outputDynamicAxes, false, Name().empty() ? L"" : Name()));
+        }
         else
         {
             DataType outputDataType = GetOutputDataType(m_op, m_inputs, true);
+
+            if (m_op == PrimitiveOpType::Cast)
+                outputDataType = static_cast<DataType>(m_attributes[PrimitiveFunction::AttributeNameNewDataType].Value<int>());
+
             std::vector<Axis> outputDynamicAxes = GetOutputDynamicAxes(m_op, m_inputs, this, m_attributes);
             bool needsGradient = std::any_of(m_inputs.begin(), m_inputs.end(), [](const Variable& input) { return input.NeedsGradient(); });
 
@@ -360,8 +316,10 @@ namespace CNTK
                         if ((inputOperandVar.DynamicAxes() != Axis::UnknownDynamicAxes()) && (inputOperandVar.DynamicAxes().size() != 2))
                             LogicError("PastValue/FutureValue Function '%S': Input operand '%S' with #dynamic axes != 2 (1 sequence axis and 1 batch axis) is not supported.", AsString().c_str(), inputOperandVar.AsString().c_str());
                     }
-
-                    outputShape = BinaryElementwiseOpOutputShape(m_op, m_inputs[0], m_inputs[1], /*inferInputDimensions =*/ true);
+                    // PastValue and FutureValue are used in RNN loops
+                    // scalar broadcasting is disabled to make sure input/output shape matches exactly
+                    bool isDelayOp = (m_op == PrimitiveOpType::PastValue || m_op == PrimitiveOpType::FutureValue);
+                    outputShape = BinaryElementwiseOpOutputShape(m_op, m_inputs[0], m_inputs[1], /*inferInputDimensions =*/ true, /*allowScalarBroadcast*/ !isDelayOp);
                     break;
                 }
                 case PrimitiveOpType::Clip:
@@ -415,15 +373,32 @@ namespace CNTK
                         case PrimitiveOpType::Sin:
                         case PrimitiveOpType::Cos:
                         case PrimitiveOpType::Cosh:
+                        case PrimitiveOpType::Asinh:
                         case PrimitiveOpType::Sinh:
                         case PrimitiveOpType::Pass:
                         case PrimitiveOpType::LabelsToGraph:
                         case PrimitiveOpType::StopGradient:
                         case PrimitiveOpType::ELU:
                         case PrimitiveOpType::StableSigmoid:
+                        case PrimitiveOpType::ConstantOp:
+                        case PrimitiveOpType::Cast:
                             assert(m_inputs.size() == 1);
                             outputShape = UnaryElementwiseOpOutputShape(m_inputs[0].Shape());
                             break;
+                        case PrimitiveOpType::EyeLikeOp:
+                        {
+                            assert(m_inputs.size() == 1);
+                            const auto& dynAxes = m_inputs[0].DynamicAxes();
+                            if (dynAxes.size() + m_inputs[0].Shape().Rank() != 2)
+                                InvalidArgument("EyeLike: Operand '%S' must have exactly 2 axes including dynamic and static axes.",
+                                    m_inputs[0].AsString().c_str());
+                            if (any_of(dynAxes.begin(), dynAxes.end(), [](const Axis& axis) {return axis.IsSequenceAxis(); }))
+                                InvalidArgument("EyeLike: Operand '%S' can not have sequence axis.",
+                                    m_inputs[0].AsString().c_str());
+
+                            outputShape = UnaryElementwiseOpOutputShape(m_inputs[0].Shape());
+                            break;
+                        }
                         case PrimitiveOpType::Where:
                             assert(m_inputs.size() == 1);
                             outputShape = NDShape{}; // scalar
@@ -532,6 +507,12 @@ namespace CNTK
                                 InvalidArgument("ScatterPacked: All operands '%S' must have dynamic axes.", NamedListString(m_inputs).c_str());
 
                             outputShape = UnaryElementwiseOpOutputShape(m_inputs[0].Shape());
+                            break;
+                        }
+                        case PrimitiveOpType::Squeeze:
+                        {
+                            assert(m_inputs.size() == 1);
+                            outputShape = GetSqueezedShape(m_inputs[0].Shape(), m_attributes);
                             break;
                         }
                         case PrimitiveOpType::TransposeAxes:
@@ -709,7 +690,7 @@ namespace CNTK
                             }
 
                             NDShape dilation = NDShape({ 1 });
-                            outputShape = ConvolutionOpOutputShape(m_op, inputShape, poolingWindowsShape, outputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, false, true, dilation, ceilOutDim);
+                            outputShape = ConvolutionOpOutputShape(m_op, inputShape, poolingWindowsShape, outputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, false, true, dilation, convolutionOpDefaultValueForGroups, ceilOutDim);
                             break;
                         }
                         case PrimitiveOpType::Unpooling:
@@ -717,8 +698,6 @@ namespace CNTK
                             assert(m_inputs.size() == 2);
 
                             auto inputShape = m_inputs[0].Shape();
-                            if (inputShape.HasFreeDimension())
-                                LogicError("Function '%S': Currently unpooling does not support operands with free static axes dimensions.", AsString().c_str());
 
                             outputShape = m_inputs[1].Shape();
                             PoolingType unpoolingType = (PoolingType)(m_attributes[PrimitiveFunction::AttributeNamePoolingType].Value<size_t>());
@@ -739,7 +718,7 @@ namespace CNTK
                             std::vector<bool> sharing = { true };
                             NDShape dilation = { 1 };
 
-                            NDShape inferredInputShape = ConvolutionOpOutputShape(PrimitiveOpType::Pooling, outputShape, unpoolingWindowShape, inputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, false, true, dilation);
+                            NDShape inferredInputShape = ConvolutionOpOutputShape(PrimitiveOpType::Pooling, outputShape, unpoolingWindowShape, inputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, false, true, dilation, convolutionOpDefaultValueForGroups);
                             if (inferredInputShape != inputShape)
                                 RuntimeError("Unpooling: The shape '%S' of the unpooling operand '%S' is different than the shape '%S from pooling the input argument '%S' using the provided options.",
                                              inputShape.AsString().c_str(), m_inputs[0].AsString().c_str(), inferredInputShape.AsString().c_str(), m_inputs[1].AsString().c_str());
@@ -856,13 +835,15 @@ namespace CNTK
                             NDShape outputMapCount, kernelShape;
                             std::tie(outputMapCount, kernelShape) = GetConvolutionOutputMapCountAndKernelShape(m_inputs[0].Shape(), m_inputs[1].Shape(), transpose);
                             auto originalKernelShape = kernelShape;
-
+                            auto groups = PrimitiveFunction::convolutionOpDefaultValueForGroups;
+                            if (m_attributes.Contains(PrimitiveFunction::AttributeNameGroups))
+                                groups = m_attributes[PrimitiveFunction::AttributeNameGroups].Value<size_t>();
                             auto inputShape = m_inputs[1].Shape();
                             if (!transpose || tmpShape.IsUnknown() || tmpShape[0] == 0)
-                                outputShape = ConvolutionOpOutputShape(m_op, inputShape, kernelShape, outputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, transpose, true, dilation);
+                                outputShape = ConvolutionOpOutputShape(m_op, inputShape, kernelShape, outputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, transpose, true, dilation, groups);
                             else
                             {
-                                NDShape inferredInputShape = ConvolutionOpOutputShape(m_op, tmpShape, kernelShape, outputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, false, true, dilation);
+                                NDShape inferredInputShape = ConvolutionOpOutputShape(m_op, tmpShape, kernelShape, outputMapCount, strides, sharing, autoPadding, lowerPad, upperPad, false, true, dilation, groups);
                                 if (inferredInputShape != inputShape)
                                 {
                                     RuntimeError("Convolution transpose: The shape '%S' of the convolution transpose operand '%S' is different than the resulting shape '%S' from convolving the "
@@ -893,6 +874,7 @@ namespace CNTK
                         case PrimitiveOpType::CosDistance:
                         case PrimitiveOpType::SquaredError:
                         case PrimitiveOpType::EditDistanceError:
+                        case PrimitiveOpType::LatticeSequenceWithSoftmax:
                         case PrimitiveOpType::ClassificationError:
                         case PrimitiveOpType::NDCG:
                         {
@@ -1133,6 +1115,17 @@ namespace CNTK
                             }
                             break;
                         }
+                        case PrimitiveOpType::TopK:
+                        {
+                            assert(m_inputs.size() == 1);
+                            auto k = m_attributes[PrimitiveFunction::AttributeNameNumItems].Value<size_t>();
+                            outputShape = m_inputs[0].Shape();
+                            if (outputShape.Rank() > 0)
+                                outputShape[0] = k;
+                            else if (k != 1)
+                                RuntimeError("Function '%S': cannot get k>1 items from a scalar.", AsString().c_str());
+                            break;
+                        }
                         default:
                             LogicError("Specified Primitive Function op %S is not supported", PrimitiveOpTypeName(m_op).c_str());
                             break;
@@ -1151,6 +1144,11 @@ namespace CNTK
                     auto maskOutput = OutputVariable({ NDShape::FreeDimension }, outputDataType, outputDynamicAxes, /*needsGradient =*/ false, Name().empty() ? L"" : Name() + L"_UnpackSequenceMask");
                     outputs.push_back(maskOutput);
                 }
+            }
+            else if (m_op == PrimitiveOpType::TopK)
+            {
+                auto IndexOutput = OutputVariable(outputShape, outputDataType, outputDynamicAxes, /*needsGradient =*/ false, Name().empty() ? L"" : Name() + L"_TopKIndexMask");
+                outputs.push_back(IndexOutput);
             }
         }
     }
@@ -1415,7 +1413,7 @@ namespace CNTK
 
     /*static*/ NDShape PrimitiveFunction::ConvolutionOpOutputShape(PrimitiveOpType op, const NDShape& operandShape, NDShape& kernelShape, NDShape& outputMapCount, NDShape& strides,
                                                                    std::vector<bool>& sharing, std::vector<bool>& autoPad, NDShape& lowerPad, NDShape& upperPad,
-                                                                   bool transpose, bool inferDimensions, NDShape& dilation, bool ceilOutputDim/* = false*/)
+                                                                   bool transpose, bool inferDimensions, NDShape& dilation, size_t groups/*=1*/, bool ceilOutputDim/* = false*/)
     {
         if (inferDimensions)
         {
@@ -1461,7 +1459,7 @@ namespace CNTK
             computeOutputShapeFunc = &Microsoft::MSR::CNTK::ConvolveGeometry::ComputeInputShape;
 
         auto outputShape = AsNDShape(computeOutputShapeFunc(AsTensorShape(operandShape), AsTensorShape(kernelShape), AsTensorShape(outputMapCount),
-            AsTensorShape(strides), sharing, autoPad, AsTensorShape(lowerPad), AsTensorShape(upperPad), AsTensorShape(dilation), ceilOutputDim,
+            AsTensorShape(strides), sharing, autoPad, AsTensorShape(lowerPad), AsTensorShape(upperPad), AsTensorShape(dilation), groups, ceilOutputDim,
             operandShape.HasFreeDimension(), false));
 
         // Any input dimensions that are free/inferred pass through as free/inferred

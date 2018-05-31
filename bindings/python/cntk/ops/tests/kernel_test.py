@@ -15,6 +15,7 @@ import cntk as C
 from .ops_test_utils import unittest_helper, _test_unary_op, AA, precision, PRECISION_TO_TYPE, constant, cntk_device
 from cntk.ops import AVG_POOLING, MAX_POOLING, MAX_UNPOOLING
 from cntk.internal import sanitize_dtype_cntk
+from cntk.cntk_py import should_force_deterministic_algorithms
 
 CONVOLUTION_OPERANDS = [
     ([[[5., 6.],  # (1, 2, 2) map
@@ -148,6 +149,45 @@ def test_spatial_convolution(input_size, conv_size, result, device_id, precision
 
     from cntk import convolution
     input_op = convolution(conv_map, a, auto_padding=[True], reduction_rank=0)
+
+    forward_input = {a: input_operand}
+    expected_forward = AA(result)
+
+    unittest_helper(input_op, forward_input, expected_forward,
+                    None, device_id=device_id, precision=precision)
+                    
+REDUCED_OUTPUT_CONVOLUTION_DATA = [
+    ([4,2,3], #input_size
+     [3,2,3], # convolution size
+     [[[55], [145], [235]],
+      [[145],[451], [757]],
+      [[235],[757], [1279]],
+      [[325],[1063],[1801]]])  # result
+]
+# this test handles 1D/2D convolution
+@pytest.mark.parametrize("input_size, conv_size, result", REDUCED_OUTPUT_CONVOLUTION_DATA)
+def test_reduced_output_convolution(input_size, conv_size, result, device_id, precision):
+    dt = PRECISION_TO_TYPE[precision]
+    dev = cntk_device(device_id)
+
+    # fill input operand with a sequence 1,2,3,... til total size and then
+    # resize to input_size
+    total_size = np.prod(input_size)
+    x = np.arange(total_size, dtype=dt)
+    input_operand = x.reshape(input_size)
+
+    a = C.input_variable(shape=input_operand.shape[1:],
+                dtype=sanitize_dtype_cntk(precision),
+                needs_gradient=False,
+                name='a')
+
+    # do the same for convolution kernel
+    total_size = np.prod(conv_size)
+    y = np.arange(total_size, dtype=dt)
+    conv_map = constant(value=y.reshape(conv_size), device=dev)
+
+    from cntk import convolution
+    input_op = convolution(conv_map, a, auto_padding=[False])
 
     forward_input = {a: input_operand}
     expected_forward = AA(result)
@@ -747,6 +787,7 @@ def test_conv_free_static_axes(warmup_input_size, free_dimension_increment, filt
                 name='a_test')
 
     from cntk import convolution
+
     conv_op_without_free_dim = convolution(conv_map, a_ref, auto_padding=[False] + [True]*len(filter_size))
     conv_op_with_free_dim = convolution(conv_map, a_test, auto_padding=[False] + [True]*len(filter_size))
 
@@ -769,9 +810,9 @@ FREE_STATIC_AXES_WITH_DYNAMIC_AXIS_CONVOLUTION_DATA = [
      [2, 10]      # Half-open range for random selection of of batch-sizes (for reference and warmup)
      ),        
 ]
-# This test point exercises convolution with multiple free static axes and batch (dynamic) axis), and ensures that the result is the same as with fixed axes.
+# This test point exercises convolution/pooling/unpooling with multiple free static axes and batch (dynamic) axis), and ensures that the result is the same as with fixed axes.
 @pytest.mark.parametrize("warmup_input_size, free_dimension_increment, filter_size, num_output_channels, batch_size_range", FREE_STATIC_AXES_WITH_DYNAMIC_AXIS_CONVOLUTION_DATA)
-def test_conv_free_static_and_dynamic_axes(warmup_input_size, free_dimension_increment, filter_size, num_output_channels, batch_size_range, device_id, precision):
+def test_conv_pooling_free_static_and_dynamic_axes(warmup_input_size, free_dimension_increment, filter_size, num_output_channels, batch_size_range, device_id, precision):
     dt = PRECISION_TO_TYPE[precision]
     dev = cntk_device(device_id)
 
@@ -797,19 +838,28 @@ def test_conv_free_static_and_dynamic_axes(warmup_input_size, free_dimension_inc
                 needs_gradient=False,
                 sequence_axis=C.Axis.new_unique_dynamic_axis('c'))
 
-    from cntk import convolution
-    conv_op_without_free_dim = convolution(conv_map, a_ref, auto_padding=[False] + [True]*len(filter_size))
-    conv_op_with_free_dim = convolution(conv_map, a_test, auto_padding=[False] + [True]*len(filter_size))
-    
-    input_img_ref = np.random.random((ref_batchsize,) + reference_input_size).astype(dt)
-    output_ref = conv_op_without_free_dim.eval({a_ref: input_img_ref}, device=dev)
+    from cntk import convolution, pooling, unpooling
 
-    input_img_warmup = np.random.random((warmup_batchsize,) + tuple(warmup_input_size)).astype(dt)
-    _ = conv_op_with_free_dim.eval({a_test: input_img_warmup}, device=dev)
-        
-    output_test = conv_op_with_free_dim.eval({a_test: input_img_ref}, device=dev)
+    def pooling_unpooling(x):
+        y = pooling(x, C.AVG_POOLING, (2,2), (2,2), auto_padding=[True])
+        return unpooling(y, x, C.MAX_UNPOOLING, (2,2), (2,2), auto_padding=[True])
 
-    assert np.allclose(output_test, output_ref, atol = 1e-4)
+    conv_ops = [ [convolution(conv_map, a_ref, auto_padding=[False] + [True]*len(filter_size)),
+                  convolution(conv_map, a_test, auto_padding=[False] + [True]*len(filter_size))],
+                 [pooling_unpooling(a_ref),
+                  pooling_unpooling(a_test)] ]
+
+    for op_pair in conv_ops:
+        conv_op_without_free_dim, conv_op_with_free_dim = op_pair
+        input_img_ref = np.random.random((ref_batchsize,) + reference_input_size).astype(dt)
+        output_ref = conv_op_without_free_dim.eval({a_ref: input_img_ref}, device=dev)
+
+        input_img_warmup = np.random.random((warmup_batchsize,) + tuple(warmup_input_size)).astype(dt)
+        _ = conv_op_with_free_dim.eval({a_test: input_img_warmup}, device=dev)
+
+        output_test = conv_op_with_free_dim.eval({a_test: input_img_ref}, device=dev)
+
+        assert np.allclose(output_test, output_ref, atol = 1e-4)
 
 DILATED_CONVOLUTION_DATA = [
     # Dilation without passing.
@@ -892,59 +942,174 @@ def test_conv_free_static_with_sequence_unpack(num_features, sequence_len, filte
 
 GROUP_CONVOLUTION_DATA = [
     # 2D Convolution.
-    (2,         # groups
-     8,         # num_output_channels
-     4,         # num_input_channels
-     [30, 40],   # input_tensor_size (not including input channels)
-     [3, 3],    # filter_size: kernel size for convolution. Length defines 2D or 3D convolution.
-     2          # batch_size
+    (4,          # groups
+     112,        # num_output_channels
+     24,         # num_input_channels
+     [30, 40],   # input_tensor_size (not including channels)
+     [3, 3],     # filter_size: kernel size for convolution. Length defines 2D or 3D convolution.
+     6,          # kernel_channels: kC, number of input channels in kernel
+     2           # batch_size
      ),
     # 3D Convolution.
-    (3,              # groups
-     6,              # num_output_channels
-     9,              # num_input_channels
-     [15, 25, 30],   # input_tensor_size (not including input channels)
+    (2,              # groups
+     10,             # num_output_channels
+     6,              # num_input_channels
+     [15, 25, 30],   # input_tensor_size (not including channels)
      [3, 5, 7],      # filter_size: kernel size for convolution. Length defines 2D or 3D convolution.
+     3,              # kernel_channels: kC, number of input channels in kernel
      2               # batch_size
      )
 ]
 # This test point exercises group convolution, and tests against grouping simulated explicitly using convolution without grouping.
-@pytest.mark.parametrize("groups, num_output_channels, num_input_channels, input_tensor_size, filter_size, batch_size", GROUP_CONVOLUTION_DATA)
-def test_group_conv(groups, num_output_channels, num_input_channels, input_tensor_size, filter_size, batch_size, device_id, precision):
+@pytest.mark.parametrize("groups, num_output_channels, num_input_channels, input_tensor_size, filter_size, kernel_channels, batch_size", GROUP_CONVOLUTION_DATA)
+def test_group_conv(groups, num_output_channels, num_input_channels, input_tensor_size, filter_size, kernel_channels, batch_size, device_id, precision):
+    if device_id == -1 and len(input_tensor_size) > 2:
+        pytest.skip('3D or higher dimensions not supported for group convolution on CPU.')
+    if device_id == 0 and should_force_deterministic_algorithms():
+        pytest.skip('Deterministic algorithms not supported on GPU for group convolution.')
+
     dt = PRECISION_TO_TYPE[precision]
     dev = cntk_device(device_id)
 
     # Generate result from CNTK API
-    conv_size = tuple([num_output_channels, num_input_channels]+filter_size)
+    conv_size = tuple([num_output_channels, kernel_channels]+filter_size)
     total_size = np.prod(conv_size)
     y = np.arange(total_size, dtype=dt).reshape(conv_size)
-    conv_map = C.constant(value=y, device=dev)
+    conv_map = C.parameter(init=y, device=dev)
 
     input_size = (num_input_channels, ) + tuple(input_tensor_size)
-    x_test = C.input_variable(input_size, dtype=dt)
+    x_test = C.input_variable(input_size, needs_gradient=True, dtype=dt)
     data = np.random.random((batch_size,) + input_size).astype(dt)
 
     conv_op = C.convolution(conv_map, x_test, auto_padding=[False] + [True]*len(filter_size), groups = groups)
 
-    output_test = conv_op.eval({x_test:data}, device=dev)
+    df_test, fv_test = conv_op.forward({x_test:data}, [conv_op.output], set([conv_op.output]), device=dev)
+    output_test = list(fv_test.values())[0]
+    grad_data = np.random.random(size=output_test.shape)
+    grad_test = conv_op.backward(df_test, {conv_op.output: grad_data}, set([x_test]))
+    output_grad_test = list(grad_test.values())[0]
 
     # Generate reference result. The code below simulates (actually is just another implementation in Python)
     # group convolution using multiple standard convolutions (i.e. groups = 1), to create the reference
     # output for testing the CNTK implementation against.     
     num_out_channels_per_group = int(num_output_channels / groups)
     num_in_channels_per_group = int(num_input_channels / groups)
-    sub_kernels_init = [y[i * num_out_channels_per_group:(i+1) * num_out_channels_per_group, 
-                                 i * num_in_channels_per_group:(i+1) * num_in_channels_per_group, ...] for i in range(0, groups)]
-    sub_kernels = [C.ops.constant(value=np.ascontiguousarray(sub_kernels_init[i]), device=dev)
-                          for i in range(0, groups)]
+    sub_kernels_init = [y[i * num_out_channels_per_group:(i+1) * num_out_channels_per_group, ...] for i in range(0, groups)]
+    sub_kernels = [C.ops.parameter(init=np.ascontiguousarray(sub_kernels_init[i]), device=dev)
+                          for i in range(0, groups)]                          
 
-    x_ref = C.input_variable(input_size, dtype=dt)                                             
+    x_ref = C.input_variable(input_size, needs_gradient=True, dtype=dt)                                             
     sub_data = [C.ops.slice(x_ref, axis=0, begin_index=i * num_in_channels_per_group,
                              end_index=(i + 1) * num_in_channels_per_group) for i in range(0, groups)]
     conv_ops_per_group = [C.ops.convolution(group_kernel, data_for_groups, auto_padding=[False] + [True]*len(filter_size)) 
                  for group_kernel, data_for_groups in zip(sub_kernels, sub_data)]
     group_conv = C.ops.splice(*conv_ops_per_group, axis=0)
 
-    output_ref = group_conv.eval({x_ref:data}, device = dev)
+    df_ref, fv_ref = group_conv.forward({x_ref:data}, [group_conv.output], set([group_conv.output]), device=dev)
+    output_ref = list(fv_ref.values())[0]
+    grad_ref = group_conv.backward(df_ref, {group_conv.output: grad_data}, set([x_ref]))
+    output_grad_ref = list(grad_ref.values())[0]
+
+    assert np.allclose(output_test, output_ref, atol=1e-4)
+    assert np.allclose(output_grad_test, output_grad_ref, atol=1e-4)
+
+FREE_STATIC_AXES_MAX_POOLING_DATA = [
+    ((1, 4, 6, 6), # warmup_input_size: Defines the input size used for first run with free static axes.
+     (1, 4, 6, 9), # second_input_size: Defines the input size used for second run with free static axes.
+     (2, 2),       # pooling_window: Dimensions of the pooling window.
+     (2, 2)        # strides
+     )
+]
+# This test point exercises maxpooling with free static axes twice (first for warmup, second for actual test), 
+# and ensures that the result is the same as with fixed axes.
+@pytest.mark.parametrize("warmup_input_size, second_input_size, pooling_window, strides", FREE_STATIC_AXES_MAX_POOLING_DATA)
+def test_max_pooling_free_static_axes(warmup_input_size, second_input_size, pooling_window, strides, device_id, precision):
+    dt = PRECISION_TO_TYPE[precision]
+    dev = cntk_device(device_id)
+
+    # Exercise operation twice - once with warmup input, second time to get the test output.
+    x = C.input_variable((warmup_input_size[0:2]+ tuple([C.FreeDimension]*(len(warmup_input_size)-2))))
+    y = C.pooling(x, C.MAX_POOLING, pooling_window, strides)
+    
+    x_data_warmup = np.arange(np.prod(warmup_input_size), dtype=dt)
+    x_data_warmup = x_data_warmup.reshape(warmup_input_size)
+    output_warmup = y.eval({x:x_data_warmup}, device=dev)
+    
+    x_data_test = np.arange(np.prod(second_input_size), dtype=dt)
+    x_data_test = x_data_test.reshape(second_input_size)
+    output_test = y.eval({x:x_data_test}, device=dev)
+    
+    # Generate reference output using fixed axes.
+    x_ref = C.input_variable(second_input_size)
+    y_ref = C.pooling(x_ref, C.MAX_POOLING, pooling_window, strides)
+    output_ref = y_ref.eval({x_ref:x_data_test}, device=dev)
+
+    assert np.allclose(output_test, output_ref, atol=1e-4)
+
+FREE_STATIC_AXES_AVG_POOLING_DATA = [
+    ((1, 4, 6, 6), # warmup_input_size: Defines the input size used for first run with free static axes.
+     (1, 4, 6, 9), # second_input_size: Defines the input size used for second run with free static axes.
+     (2, 2),       # pooling_window: Dimensions of the pooling window.
+     (2, 2)        # strides
+     )
+]
+# This test point exercises average pooling with free static axes twice (first for warmup, second for actual test), 
+# and ensures that the result is the same as with fixed axes.
+@pytest.mark.parametrize("warmup_input_size, second_input_size, pooling_window, strides", FREE_STATIC_AXES_AVG_POOLING_DATA)
+def test_avg_pooling_free_static_axes(warmup_input_size, second_input_size, pooling_window, strides, device_id, precision):
+    dt = PRECISION_TO_TYPE[precision]
+    dev = cntk_device(device_id)
+
+    # Exercise operation twice - once with warmup input, second time to get the test output.
+    x = C.input_variable((warmup_input_size[0:2]+ tuple([C.FreeDimension]*(len(warmup_input_size)-2))))
+    y = C.pooling(x, C.AVG_POOLING, pooling_window, strides)
+    
+    x_data_warmup = np.arange(np.prod(warmup_input_size), dtype=dt)
+    x_data_warmup = x_data_warmup.reshape(warmup_input_size)
+    output_warmup = y.eval({x:x_data_warmup}, device=dev)
+    
+    x_data_test = np.arange(np.prod(second_input_size), dtype=dt)
+    x_data_test = x_data_test.reshape(second_input_size)
+    output_test = y.eval({x:x_data_test}, device=dev)
+    
+    # Generate reference output using fixed axes.
+    x_ref = C.input_variable(second_input_size)
+    y_ref = C.pooling(x_ref, C.AVG_POOLING, pooling_window, strides)
+    output_ref = y_ref.eval({x_ref:x_data_test}, device=dev)
+
+    assert np.allclose(output_test, output_ref, atol=1e-4)
+
+FREE_STATIC_AXES_MAX_UNPOOLING_DATA = [
+    ((1, 4, 6, 6), # warmup_input_size: Defines the input size used for first run with free static axes.
+     (1, 4, 6, 9), # second_input_size: Defines the input size used for second run with free static axes.
+     (2, 2),       # pooling_window: Dimensions of the pooling window.
+     (2, 2)        # strides
+     )
+]
+# This test point exercises max unpooling with free static axes twice (first for warmup, second for actual test), 
+# and ensures that the result is the same as with fixed axes.
+@pytest.mark.parametrize("warmup_input_size, second_input_size, pooling_window, strides", FREE_STATIC_AXES_MAX_UNPOOLING_DATA)
+def test_max_unpooling_free_static_axes(warmup_input_size, second_input_size, pooling_window, strides, device_id, precision):
+    dt = PRECISION_TO_TYPE[precision]
+    dev = cntk_device(device_id)
+
+    # Exercise operation twice - once with warmup input, second time to get the test output.
+    x = C.input_variable((warmup_input_size[0:2]+ tuple([C.FreeDimension]*(len(warmup_input_size)-2))))
+    y = C.pooling(x, C.MAX_POOLING, pooling_window, strides)
+    z = C.unpooling(y, x, C.MAX_UNPOOLING, pooling_window, strides)
+    
+    x_data_warmup = np.arange(np.prod(warmup_input_size), dtype=dt)
+    x_data_warmup = x_data_warmup.reshape(warmup_input_size)
+    output_warmup = z.eval({x:x_data_warmup}, device=dev)
+    
+    x_data_test = np.arange(np.prod(second_input_size), dtype=dt)
+    x_data_test = x_data_test.reshape(second_input_size)
+    output_test = z.eval({x:x_data_test}, device=dev)
+    
+    # Generate reference output using fixed axes.
+    x_ref = C.input_variable(second_input_size)
+    y_ref = C.pooling(x_ref, C.MAX_POOLING, pooling_window, strides)
+    z_ref = C.unpooling(y_ref, x_ref, C.MAX_UNPOOLING, pooling_window, strides)
+    output_ref = z_ref.eval({x_ref:x_data_test}, device=dev)
 
     assert np.allclose(output_test, output_ref, atol=1e-4)

@@ -754,7 +754,7 @@ namespace CNTK
             if (mask != nullptr)
                 Value::GetSequenceStartsAndLengths(mask, sequenceBeginIndices, sequenceLengths, numDynamicAxes);
 
-            bool hasTruncatedSequences = std::find_if(sequenceBeginIndices.begin(), sequenceBeginIndices.end(), [](const int& val) { return (val < 0); }) != sequenceBeginIndices.end();
+            bool hasTruncatedSequences = std::find_if(sequenceBeginIndices.begin(), sequenceBeginIndices.end(), [](const ptrdiff_t& val) { return (val < 0); }) != sequenceBeginIndices.end();
 
             auto layout = std::make_shared<MBLayout>();
             std::vector<std::pair<size_t, size_t>> placement;
@@ -924,6 +924,69 @@ namespace CNTK
         return GetValueObjectFromCNTKImplMatrixAndMBLayout(varShape, var.DynamicAxes(), matrix, layout, readOnly);
     }
 
+    std::vector<Axis> GetSqueezableAxes(const NDShape& inputShape)
+    {
+        std::vector<Axis> axes;
+        auto replacementDims = inputShape.Dimensions();
+        int staticIdx = 0;
+        for (int i = 0; i < inputShape.Rank(); i++)
+        {
+            if (inputShape[i] == 1)
+            {
+                axes.push_back(Axis(staticIdx));
+            }
+
+            if (inputShape[i] != NDShape::FreeDimension || inputShape[i] != NDShape::InferredDimension)
+            {
+                staticIdx++;
+            }
+        }
+
+        return axes;
+    }
+
+    NDShape GetSqueezedShape(const NDShape& inputShape)
+    {
+        auto replacementDims = inputShape.Dimensions();
+        replacementDims.erase(std::remove_if(std::begin(replacementDims), std::end(replacementDims),
+            [](const size_t dim) {return dim == 1; }), std::end(replacementDims));
+        return NDShape(replacementDims);
+    }
+
+    NDShape GetSqueezedShape(const NDShape& inputShape, const std::vector<Axis>& axes)
+    {
+        auto replacementDims = inputShape.Dimensions();
+        auto squeezedIdx = std::vector<size_t>({});
+        for (const Axis& ax : axes)
+        {
+            auto axis = NormalizeStaticAxis(const_cast<Axis &>(ax), inputShape.Rank());
+            if (!axis.IsStaticAxis())
+                LogicError("Squeeze: can only squeeze static axes.");
+            auto idx = axis.StaticAxisIndex();
+            if (inputShape[idx] != 1)
+                LogicError("Squeeze: cannot squeeze a static axis whose dimension (=%zd) is not 1.", inputShape[idx]);
+            squeezedIdx.push_back(idx);
+        }
+        // delete all squeezed indices from back to front
+        std::sort(std::begin(squeezedIdx), std::end(squeezedIdx), [](const size_t a, const size_t b) {return a > b; });
+        for (auto i : squeezedIdx)
+            replacementDims.erase(std::begin(replacementDims) + i);
+
+        return NDShape(replacementDims);
+    }
+
+    NDShape GetSqueezedShape(const NDShape& inputShape, const Dictionary& squeezeConfig)
+    {
+        // collect all indices that need to be squeezed
+        if (squeezeConfig.Contains(PrimitiveFunction::AttributeNameAxisVec))
+        {
+            auto axes = AsVector<Axis>(squeezeConfig[PrimitiveFunction::AttributeNameAxisVec].Value<std::vector<DictionaryValue>>());
+            return GetSqueezedShape(inputShape, axes);
+        }
+        else
+            return GetSqueezedShape(inputShape);
+    }
+
     NDMaskPtr CreateMask(const std::vector<size_t>& sequenceLengths, const std::vector<bool>& sequenceStartFlags, const DeviceDescriptor& device)
     {
         size_t numSequences = sequenceLengths.size();
@@ -991,7 +1054,9 @@ namespace CNTK
 
     Learners::Learners(const std::vector<LearnerPtr>& learners) :
         m_learners(learners),
-        m_isDistributed(false)
+        m_isDistributed(false),
+        m_metricAggregatingLearner(nullptr),
+        DoAggregateMetricsIfNeededLambda(nullptr)
     {
         if (learners.empty())
             InvalidArgument("These must be at least one learner.");
@@ -999,8 +1064,32 @@ namespace CNTK
         std::unordered_set<Parameter> learnerParameters;
         for (const auto& learner : m_learners)
         {
-            if (dynamic_pointer_cast<DistributedLearner>(learner) != nullptr)
+            DistributedLearnerPtr distLearner = dynamic_pointer_cast<DistributedLearner>(learner);
+            if (distLearner)
+            {
                 m_isDistributed = true;
+
+                // If this is the only learner, set it as the MetricAggregator
+                // so that the user does not need to explicitly mark it.
+                if (m_learners.size() == 1)
+                {
+                    distLearner->SetAsMetricAggregator();
+                }
+                else
+                {
+                    if (dynamic_pointer_cast<QuantizedDistributedCommunicator>(distLearner->GetCommunicator()) != nullptr)
+                    {
+                        InvalidArgument("Learners with QuantizedDistributedCommunicator is not supported in a multiple learner distributed training scenarios.");
+                    }
+                }
+
+                // Use only one of the learners marked as MetricAggregator to aggregate loss and eval.
+                if (distLearner->IsMetricAggregator())
+                {
+                    m_metricAggregatingLearner = learner;
+                    DoAggregateMetricsIfNeededLambda = std::bind(&DistributedLearner::DoAggregateMetricsIfNeeded, distLearner, std::placeholders::_1, std::placeholders::_2);
+                }
+            }
 
             const auto& currentLearnerParameters = learner->Parameters();
             for (const auto& parameter : currentLearnerParameters)
@@ -1009,6 +1098,11 @@ namespace CNTK
                 if (!insertRetVal.second)
                     InvalidArgument("Parameter '%S' is covered by 2 different learners", parameter.AsString().c_str());
             }
+        }
+
+        if (!m_metricAggregatingLearner)
+        {
+            m_metricAggregatingLearner = m_learners.front();
         }
 
         if (m_isDistributed)
@@ -1022,6 +1116,18 @@ namespace CNTK
             if (dynamic_pointer_cast<DistributedLearner>(learner) == nullptr)
                 InvalidArgument("Cannot use a non-distributed learner for some parameters together with a distributed learner for other parameters, in a single Trainer.");
         }
+
+        size_t distributeAfter = dynamic_pointer_cast<DistributedLearner>(m_learners.front())->ParallelizationAfter();
+        for (const auto& learner : m_learners)
+        {
+            if (distributeAfter != dynamic_pointer_cast<DistributedLearner>(learner)->ParallelizationAfter())
+                InvalidArgument("All distributed learners need to have the same DistributeAfterSamples limit.");
+        }
+    }
+
+    const LearnerPtr& Learners::GetMetricAggregatingLearner() const
+    {
+        return m_metricAggregatingLearner;
     }
 
     void Learners::GetLearnerGradients(LearnerPtr learner, const std::unordered_map<Parameter, NDArrayViewPtr>& allGradients, std::unordered_map<Parameter, NDArrayViewPtr>& learnerGradients)
@@ -1054,32 +1160,43 @@ namespace CNTK
         std::vector<MinibatchInfo> mbInfoPerLearner;
         mbInfoPerLearner.resize(m_learners.size());
 
+        MinibatchInfo tmpMinibatchInfo{
+            minibatch.atEndOfData,
+            minibatch.atEndOfSweep,
+            minibatch.numberOfSamples,
+            minibatch.trainingLossValue->DeepClone(),
+            minibatch.evalCriterionValue->DeepClone() };
+
+        bool metricAggregatorUpdated = false;
         bool anyUpdatesPerformed = false;
+        size_t metricAggregatorIndex = 0;
         for (size_t i = 0; i < m_learners.size(); i++)
         {
             auto l  = m_learners[i];
-            mbInfoPerLearner[i] = minibatch;
-
             auto learner = dynamic_pointer_cast<DistributedLearner>(l);
             assert(learner != nullptr); // Already checked in the constructor.
+
+            if (learner->IsMetricAggregator())
+            {
+                mbInfoPerLearner[i] = minibatch;
+                metricAggregatorUpdated = true;
+                metricAggregatorIndex = i;
+            }
+            else
+            {
+                mbInfoPerLearner[i] = tmpMinibatchInfo;
+            }
 
             std::unordered_map<Parameter, NDArrayViewPtr> learnerGradients;
             GetLearnerGradients(learner, gradientValues, learnerGradients);
             anyUpdatesPerformed |= learner->Update(learnerGradients, mbInfoPerLearner[i]);
         }
+        if (!metricAggregatorUpdated)
+            RuntimeError("Update failed: Metric aggregation did not happen, none of the learners was marked as metric aggregator.");
 
-        minibatch = mbInfoPerLearner.front();
-
-        // Checking that progress on the global timeline performed equally.
-        // This will currently prohibit usage of BlockMomentum with Simple/1Bit,
-        // but 1Bit and Simple can be used together.
-        for (size_t i = 1; i < mbInfoPerLearner.size(); i++)
-        {
-            auto mbInfo = mbInfoPerLearner[i];
-            if (minibatch.numberOfSamples != mbInfo.numberOfSamples)
-                RuntimeError("Combining distributed learners with different methods"
-                    " for aggregation minibatch sample count is currently not supported");
-        }
+        // In a single trainer, the number of samples should be same for each learner. 
+        // Assign the minibatch to the information from the matrix aggregating learner. 
+        minibatch = mbInfoPerLearner[metricAggregatorIndex];
         return anyUpdatesPerformed;
     }
 
@@ -1104,12 +1221,15 @@ namespace CNTK
 
     template std::pair<std::shared_ptr<const Matrix<float>>, MBLayoutPtr> Utils::GetCNTKImplMatrixAndMBLayoutFromValueObject<float>(const Variable& var, const ValuePtr& value, NDShape* inferredVarShape);
     template std::pair<std::shared_ptr<const Matrix<double>>, MBLayoutPtr> Utils::GetCNTKImplMatrixAndMBLayoutFromValueObject<double>(const Variable& var, const ValuePtr& value, NDShape* inferredVarShape);
+    template std::pair<std::shared_ptr<const Matrix<half>>, MBLayoutPtr> Utils::GetCNTKImplMatrixAndMBLayoutFromValueObject<half>(const Variable& var, const ValuePtr& value, NDShape* inferredVarShape);
 
     template ValuePtr Utils::GetValueObjectFromCNTKImplMatrixAndMBLayout<float>(const NDShape& sampleShape, const std::vector<Axis>& sampleDynamicAxes, const Matrix<float>& matrix, const MBLayoutPtr& layout, bool readOnly /*= true*/);
     template ValuePtr Utils::GetValueObjectFromCNTKImplMatrixAndMBLayout<double>(const NDShape& sampleShape, const std::vector<Axis>& sampleDynamicAxes, const Matrix<double>& matrix, const MBLayoutPtr& layout, bool readOnly /*= true*/);
+    template ValuePtr Utils::GetValueObjectFromCNTKImplMatrixAndMBLayout<half>(const NDShape& sampleShape, const std::vector<Axis>& sampleDynamicAxes, const Matrix<half>& matrix, const MBLayoutPtr& layout, bool readOnly /*= true*/);
 
     template ValuePtr Utils::GetValueObjectFromCNTKImplMatrixAndMBLayout<float>(const Variable& var, const ComputationNodeBasePtr& computationNode, const Matrix<float>& matrix, const MBLayoutPtr& layout, bool readOnly /*= true*/);
     template ValuePtr Utils::GetValueObjectFromCNTKImplMatrixAndMBLayout<double>(const Variable& var, const ComputationNodeBasePtr& computationNode, const Matrix<double>& matrix, const MBLayoutPtr& layout, bool readOnly /*= true*/);
+    template ValuePtr Utils::GetValueObjectFromCNTKImplMatrixAndMBLayout<half>(const Variable& var, const ComputationNodeBasePtr& computationNode, const Matrix<half>& matrix, const MBLayoutPtr& layout, bool readOnly /*= true*/);
 
     void Accumulator::Update(const ValuePtr& delta, const DeviceDescriptor& device)
     {
@@ -1117,7 +1237,7 @@ namespace CNTK
             InvalidArgument("Attempting to accumulate a null Value.");
 
         bool copied = false;
-        if (m_isUninitialized ||
+        if (!m_isInitialized ||
             GetDataType() != delta->GetDataType() ||
             Shape() != delta->Shape() ||
             Device() != device ||
@@ -1127,13 +1247,15 @@ namespace CNTK
             m_data = MakeSharedObject<NDArrayView>(delta->GetDataType(), delta->Shape(), device);
             m_mask = delta->Mask();
             ResetToZero();
-            m_isUninitialized = false;
+            m_isInitialized = true;
         }
 
         if (delta->GetDataType() == DataType::Float)
             Data()->GetWritableTensorView<float>()->AddCopyOf(*delta->Data()->GetTensorView<float>());
-        else
+        else if(delta->GetDataType() == DataType::Double)
             Data()->GetWritableTensorView<double>()->AddCopyOf(*delta->Data()->GetTensorView<double>());
+        else
+            RuntimeError("Unexpected data type in accumulator");
 
         if (copied && m_numUpdates != 0)
             RuntimeError("Accumulation values are created when accumulated num updates not zero");
@@ -1149,13 +1271,15 @@ namespace CNTK
 
     void Accumulator::ResetToZero()
     {
-        if (m_isUninitialized)
+        if (!m_isInitialized)
             return;
 
         if (GetDataType() == DataType::Float)
             Data()->SetValue(0.0f);
-        else
+        else if (GetDataType() == DataType::Double)
             Data()->SetValue(0.0);
+        else
+            RuntimeError("Unsupported data type in Accumulator");
     }
 
     std::wstring DynamicAxesAsString(const std::vector<Axis>& axes, bool rowMajor)

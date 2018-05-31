@@ -15,8 +15,9 @@ from ..variables import Variable, Parameter, Constant
 from cntk.internal import sanitize_input, sanitize_shape, sanitize_axis, sanitize_dynamic_axes, typemap
 from cntk.internal.utils import get_data_type
 from cntk.cntk_py import sentinel_value_for_auto_select_random_seed as auto_select
+from cntk import times, softmax, parameter
+import cntk as C
 from ..axis import Axis
-
 
 @typemap
 def cosine_distance(x, y, name=''):
@@ -349,3 +350,71 @@ def nce_loss(weights, biases, inputs, labels, noise_distribution, num_samples=32
     noise_distribution = sanitize_input(noise_distribution, dtype)
     return nce_loss(weights, biases, inputs, labels, noise_distribution,
                     num_samples, allow_duplicates, seed, name)
+
+@typemap
+def lattice_sequence_with_softmax(label, prediction, loglikelihood, lattice, symListPath, phonePath, stateListPath, transProbPath, latticeConfigPath="LatticeNode.config", 
+                                  hSmoothingWeight = 0.95, frameDropThresh = 1e-10, doReferenceAlign = False, seqGammarUsesMBR = False, 
+                                  seqGammarAMF = 14.0, seqGammarLMF = 14.0, seqGammarBMMIFactor = 0.0, seqGammarWordPen = 0.0, name=''):
+    from cntk.cntk_py import lattice_sequence_with_softmax
+    dtype = get_data_type(label, prediction, loglikelihood, lattice)
+    label = sanitize_input(label, dtype)
+    prediction = sanitize_input(prediction, dtype)
+    loglikelihood = sanitize_input(loglikelihood, dtype)
+    lattice = sanitize_input(lattice, dtype)
+    return lattice_sequence_with_softmax(label, prediction, loglikelihood, lattice, symListPath, phonePath, stateListPath, transProbPath, latticeConfigPath, hSmoothingWeight, frameDropThresh, doReferenceAlign, seqGammarUsesMBR, seqGammarAMF, seqGammarLMF, seqGammarBMMIFactor, seqGammarWordPen, name)
+
+@typemap
+def hierarchical_softmax_layer(input_var, label_index, label_dim, label_classes=None):
+    '''
+    A two layers hierarchical softmax function:
+
+    Args:
+        input_var: Variable with shape: [#,*](dim_x)
+        label_index: index of label's category:  [#,*](1)
+        label_dim: number of the label categories
+        label_classes: number of classes of the label categories
+    Returns:
+        output_prob: the probability of the given label [#,*](1)
+        class_probs: the probability of all the label classes [#,*](label_classes)
+        all_probs: the probability of all label classes 
+    '''
+    input_dim = input_var.shape[0]
+
+    if not label_classes:
+        label_classes = int(np.ceil(np.sqrt(float(label_dim))))
+
+    n_outputs_per_class = int(np.ceil(label_dim / label_classes))
+
+    target_class = C.floor((label_index + 0.5) / n_outputs_per_class)
+    target_output_in_class = C.round(label_index - target_class * n_outputs_per_class)
+
+    w1 = parameter(shape=(input_dim, label_classes), init=C.glorot_normal(), name='hsoftmax_w1')
+    b1 = parameter(shape=(label_classes), init=C.glorot_normal(), name='hsoftmax_b1')
+    w2s = parameter(shape=(label_classes, input_dim, n_outputs_per_class,), init=C.glorot_normal(), name='hsoftmax_w2s')
+    b2s = parameter(shape=(label_classes, n_outputs_per_class,), init=C.glorot_normal(), name='hsoftmax_b2s')
+
+    class_probs = softmax(b1 + times(input_var, w1))
+
+    # TODO: fix the bug in backprop for sparse, and use sparse embedding to accelerate
+    target_class_one_hot = C.one_hot(target_class, num_classes=label_classes, sparse_output=False)
+    w2 = C.reshape(C.times(target_class_one_hot, w2s, output_rank=2), [input_dim, -1])
+    b2 = C.reshape(times(target_class_one_hot, b2s, output_rank=1), [-1])
+    probs_in_class = softmax(b2 + times(input_var, w2))
+
+    prob_in_class = C.times_transpose(C.one_hot(target_output_in_class, num_classes=n_outputs_per_class, sparse_output=False), probs_in_class)
+    class_prob = C.times_transpose(C.one_hot(target_class, num_classes=label_classes, sparse_output=False), class_probs)
+    output_prob = prob_in_class * class_prob
+
+    # this is for calculating all the outputs' probabilities
+    all_probs = []
+    for i in range(label_classes):
+        ci = C.constant(i)
+        ci_one_hot = C.one_hot(ci, num_classes=label_classes, sparse_output=False)
+        w2a = C.times(ci_one_hot, w2s, output_rank=2)
+        b2a = C.times(ci_one_hot, b2s, output_rank=1)
+        probs_in_classa = C.softmax(b2a + times(input_var, w2a))
+        class_proba = C.times_transpose(ci_one_hot, class_probs)
+        output_proba = probs_in_classa * class_proba
+        all_probs.append(output_proba)
+
+    return output_prob, class_probs, all_probs

@@ -142,7 +142,7 @@ class Function(cntk_py.Function):
     _placeholders_under_construction = set()
 
     @staticmethod
-    def _to_Function(f, make_block=False, op_name=None, name=None):
+    def _to_Function_unchecked(f, make_block=False, op_name=None, name=None):
         '''implements @Function decorator; see :class:`~cntk.layers.functions.Function`'''
         f_name = f.__name__ # (only used for debugging and error messages)
 
@@ -242,21 +242,42 @@ class Function(cntk_py.Function):
                     fun_args = force_order_args(fun_args)
                     out = invoke(fun_args)
 
-            # verify that we got the parameter order right
-            out_arg_names = [arg.name for arg in out.signature]
-            assert out_arg_names == arg_names, (out_arg_names, arg_names)
+            return out, args
 
-            if len(out.signature) != len(args):
-                unfulfilled_args = set(out.signature) - set(args)
-                if unfulfilled_args:
-                    unfulfilled_arg_names = [arg.name for arg in unfulfilled_args]
-                    raise TypeError("CNTK Function '{}' has {} missing arguments ({}), which is currently not supported".format(f_name, len(unfulfilled_arg_names), ", ".join(unfulfilled_arg_names)))
-                else:
-                    unused_args = set(args) - set(out.signature)
-                    unused_arg_names = [arg.name for arg in unused_args]
-                    raise TypeError("CNTK Function '{}' has {} unused arguments ({}), which is currently not supported".format(f_name, len(unused_arg_names), ", ".join(unused_arg_names)))
+    @staticmethod
+    def _sanitize_check_Function(f_out, f_args, f):
+        arg_names, annotations = get_python_function_arguments(f)
+        #verify the argument length first
+        if len(f_out.signature) != len(f_args):
+            f_name = f.__name__
+            unfulfilled_args = set(f_out.signature) - set(f_args)
+            if unfulfilled_args:
+                unfulfilled_arg_names = [arg.name for arg in unfulfilled_args]
+                raise TypeError(
+                    "CNTK Function '{}' has {} missing arguments ({}), which is currently not supported".format(f_name,
+                                                                                                                len(
+                                                                                                                    unfulfilled_arg_names),
+                                                                                                                ", ".join(
+                                                                                                                    unfulfilled_arg_names)))
+            else:
+                unused_args = set(f_args) - set(f_out.signature)
+                unused_arg_names = [arg.name for arg in unused_args]
+                raise TypeError(
+                    "CNTK Function '{}' has {} unused arguments ({}), which is currently not supported".format(f_name,
+                                                                                                               len(
+                                                                                                                   unused_arg_names),
+                                                                                                               ", ".join(
+                                                                                                                   unused_arg_names)))
 
-            return out
+        #then verify that we got the parameter order right
+        out_arg_names = [arg.name for arg in f_out.signature]
+        assert out_arg_names == arg_names, (out_arg_names, arg_names)
+        return f_out
+
+    @staticmethod
+    def _to_Function(f, make_block=False, op_name=None, name=None):
+        out, args = Function._to_Function_unchecked(f, make_block, op_name, name)
+        return Function._sanitize_check_Function(out, args, f)
 
     @property
     def signature(self):
@@ -546,6 +567,44 @@ class Function(cntk_py.Function):
         '''
         value = _to_cntk_dict_value(value)
         return super(Function, self).set_attribute(name, value)
+
+    def _get_or_reset_custom_attributes(self, reset):
+        '''
+        Internal non-property version of custom attribute
+        Note that composite function does not have custom attributes, so the property returns its root_function's custom_attributes.
+
+        Args:
+            reset (bool): whether to reset the dictionary
+        '''
+        if self.is_composite:
+            return self.root_function._get_or_reset_custom_attributes(reset)
+        else:
+            if reset:
+                super(Function, self).reset_custom_attributes()
+            return super(Function, self).get_custom_attributes()
+
+    @property
+    def custom_attributes(self):
+        '''
+        Get function custom attributes in cntk_py.Dictionary for both read and write.
+        '''
+        return self._get_or_reset_custom_attributes(reset=False)
+
+    @custom_attributes.setter
+    def custom_attributes(self, values):
+        '''
+        Set function custom attributes in a batch, and drops old attributes
+
+        Args:
+            values (dict): a dictionary of new custom attributes
+        '''
+        values = values or {}
+        if not isinstance(values, dict):
+            raise TypeError("values must be a dictionary")
+
+        custom_attr = self._get_or_reset_custom_attributes(reset=True)
+        for key in values.keys():
+            custom_attr[key] = values[key]
 
     @typemap
     def clone(self, method, substitutions=None):
@@ -1052,6 +1111,13 @@ class Function(cntk_py.Function):
         '''
         return super(Function, self).uid()
 
+    def print_node_timing(self):
+        '''
+        Prints per-node average timing per-minibatch for each primitive function.
+        statistics would reset after print
+        '''
+        return super(Function, self).print_node_timing()
+
 
 
     def __str__(self):
@@ -1320,7 +1386,7 @@ class Function(cntk_py.Function):
          ... def criterion(data, label_one_hot):
          ...     z = model(data)  # apply model. Computes a non-normalized log probability for every output class.
          ...     return cntk.cross_entropy_with_softmax(z, label_one_hot)
-         >>> learner = cntk.sgd(model.parameters, cntk.learning_rate_schedule(0.1, cntk.UnitType.minibatch))
+         >>> learner = cntk.sgd(model.parameters, 0.1)
          >>> progress = criterion.train((X, Y), minibatch_size=25, max_epochs=2, epoch_size=125, parameter_learners=[learner])
          >>> print("%.2f" % progress.epoch_summaries[-1].loss) # get the final epoch's loss value
          0.68
